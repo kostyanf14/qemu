@@ -1,0 +1,42 @@
+
+# This defines global scenarios for controlling execution of the
+# entire pipeline. Per job 'rules:' statements can then finese
+# this on an individual basis if desired
+workflow:
+  rules:
+    # On the main repo, prior to merging a patch series, CI is run
+    # on the "staging" branch. The result gates whether the series
+    # is then pushed to the default branch. There is thus no need
+    # to run CI again
+    # when it is pushed to the default branch
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_PROJECT_NAMESPACE == "berrange" && $CI_COMMIT_REF_NAME == "ci-restrict"'
+      when: never
+
+    # For official release tags on the main, the branch associated
+    # with the tag will already have undergone CI testing
+    # For user forks, tags are typically added by tools like
+    # git-publish at the same time as pushing the branch.
+    # Thus there is no need to run pipelines for tags.
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_PROJECT_NAMESPACE == "berrange" && $CI_COMMIT_TAG != ""'
+      when: never
+
+    # Run CI on any git pushes to branches
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+      when: always
+
+    # Run CI on any regular scheduled pipelines (ie nightly builds)
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: always
+
+    # Run CI if user invokes a pipeline using explicit REST API call
+    - if: '$CI_PIPELINE_SOURCE == "api"'
+      when: always
+
+    # Run CI if user invokes a pipeline using Web UI
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: always
+
+    # Don't run CI in any other scenario ($CI_PIPELINE_SOURCE values
+    # covering: external, chat, webide, merge_request_event,
+    # external_pull_request_event, parent_pipeline, trigger, or pipeline)
+    - when: never
