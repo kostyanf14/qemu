@@ -594,7 +594,7 @@ static void get_pci_address_for_device(GuestPCIAddress *pci,
     }
 }
 
-static GuestPCIAddress *get_pci_info(int number, Error **errp)
+static GuestPCIAddress *get_pci_info(GuestDiskBusType bus_type, int number, Error **errp)
 {
     HDEVINFO dev_info = INVALID_HANDLE_VALUE;
     HDEVINFO parent_dev_info = INVALID_HANDLE_VALUE;
@@ -610,6 +610,14 @@ static GuestPCIAddress *get_pci_info(int number, Error **errp)
     pci->slot = -1;
     pci->function = -1;
     pci->bus = -1;
+
+    if (bus_type == GUEST_DISK_BUS_TYPE_USB) {
+        g_debug("bus type is usb. Skipping getting PCI information");
+        /*
+         * Report -1 values for non-PCI buses without fail
+         */
+        goto end;
+    }
 
     dev_info = SetupDiGetClassDevs(&GUID_DEVINTERFACE_DISK, 0, 0,
                                    DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
@@ -867,7 +875,7 @@ static void get_single_disk_info(int disk_number,
      * if that doesn't hold since that suggests some other unexpected
      * breakage
      */
-    disk->pci_controller = get_pci_info(disk_number, &local_err);
+    disk->pci_controller = get_pci_info(disk->bus_type, disk_number, &local_err);
     if (local_err) {
         error_propagate(errp, local_err);
         goto err_close;
