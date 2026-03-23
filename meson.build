@@ -329,7 +329,7 @@ foreach lang : all_languages
   compiler = meson.get_compiler(lang)
   if compiler.get_id() == 'gcc' and compiler.version().version_compare('>=10.4')
     # ok
-  elif compiler.get_id() == 'clang' and compiler.compiles('''
+  elif (compiler.get_id() in ['clang', 'clang-cl']) and compiler.compiles('''
       #ifdef __apple_build_version__
       # if __clang_major__ < 15 || (__clang_major__ == 15 && __clang_minor__ < 0)
       #  error You need at least XCode Clang v15.0 to compile QEMU
@@ -374,7 +374,7 @@ elif host_os == 'haiku'
   qemu_common_flags += ['-DB_USE_POSITIVE_POSIX_ERRORS', '-D_BSD_SOURCE', '-fPIC']
 elif host_os == 'windows'
   # plugins use delaylib, and clang needs to be used with lld to make it work.
-  if compiler.get_id() == 'clang' and compiler.get_linker_id() != 'ld.lld'
+  if (compiler.get_id() in ['clang', 'clang-cl']) and compiler.get_linker_id() != 'ld.lld'
     error('On windows, you need to use lld with clang - use msys2 clang64/clangarm64 env')
   endif
 endif
