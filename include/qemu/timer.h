@@ -810,10 +810,7 @@ static inline int64_t get_max_clock_jump(void)
 /* get host real time in nanosecond */
 static inline int64_t get_clock_realtime(void)
 {
-    struct timeval tv;
-
-    gettimeofday(&tv, NULL);
-    return tv.tv_sec * 1000000000LL + (tv.tv_usec * 1000);
+    return g_get_real_time() * 1000;
 }
 
 extern int64_t clock_start;

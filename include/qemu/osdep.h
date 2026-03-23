@@ -124,7 +124,9 @@ QEMU_EXTERN_C int daemon(int, int);
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#ifndef _MSC_VER
 #include <sys/time.h>
+#endif
 #include <assert.h>
 /* setjmp must be declared before system/os-win32.h
  * because it is redefined there. */
