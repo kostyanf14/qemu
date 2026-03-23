@@ -2956,6 +2956,19 @@ has_int128 = has_int128_type and cc.links('''
     a = a * a;
     return 0;
   }''')
+
+if has_int128 and host_arch in ['x86_64', 'aarch64'] and compiler.get_linker_id() == 'lld-link'
+  foreach lang: all_languages
+    compiler = meson.get_compiler(lang)
+    compiler_rt = compiler.find_library('clang_rt.builtins-' + host_arch, required: false)
+    if compiler_rt.found()
+      add_project_dependencies(compiler_rt, language: lang)
+    else
+      has_int128 = false
+    endif
+  endforeach
+endif
+
 config_host_data.set('CONFIG_INT128', has_int128)
 
 if has_int128_type
