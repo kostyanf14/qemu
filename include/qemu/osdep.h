@@ -118,7 +118,11 @@ QEMU_EXTERN_C int daemon(int, int);
 #include <limits.h>
 /* Put unistd.h before time.h as that triggers localtime_r/gmtime_r
  * function availability on recentish Mingw-w64 platforms. */
+#ifdef _MSC_VER
+#include "qemu/posix-compat-msvc.h"
+#else
 #include <unistd.h>
+#endif
 #include <time.h>
 #include <ctype.h>
 #include <errno.h>
