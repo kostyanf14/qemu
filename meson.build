@@ -374,7 +374,8 @@ elif host_os == 'haiku'
   qemu_common_flags += ['-DB_USE_POSITIVE_POSIX_ERRORS', '-D_BSD_SOURCE', '-fPIC']
 elif host_os == 'windows'
   # plugins use delaylib, and clang needs to be used with lld to make it work.
-  if (compiler.get_id() in ['clang', 'clang-cl']) and compiler.get_linker_id() != 'ld.lld'
+  if (compiler.get_id() in ['clang', 'clang-cl']) and (compiler.get_linker_id() not in ['ld.lld', 'lld-link'])
+    # Invoke ld.lld (Unix), ld64.lld (macOS), lld-link (Windows), wasm-ld (WebAssembly) instead
     error('On windows, you need to use lld with clang - use msys2 clang64/clangarm64 env')
   endif
 endif
