@@ -16,36 +16,6 @@
 #define __MIDL_user_allocate_free_DEFINED__
 #include <windows.h>
 #include <shlwapi.h>
-
-/* Reduce warnings to include vss.h */
-
-/* Ignore annotations for MS IDE */
-#define __in  IN
-#define __out OUT
-#define __RPC_unique_pointer
-#define __RPC_string
-#define __RPC__deref_inout_opt
-#define __RPC__out
-#ifndef __RPC__out_ecount_part
-#define __RPC__out_ecount_part(x, y)
-#endif
-#define _declspec(x)
-#undef uuid
-#define uuid(x)
-
-/* Undef some duplicated error codes redefined in vss.h */
-#undef VSS_E_BAD_STATE
-#undef VSS_E_PROVIDER_NOT_REGISTERED
-#undef VSS_E_PROVIDER_VETO
-#undef VSS_E_OBJECT_NOT_FOUND
-#undef VSS_E_VOLUME_NOT_SUPPORTED
-#undef VSS_E_VOLUME_NOT_SUPPORTED_BY_PROVIDER
-#undef VSS_E_OBJECT_ALREADY_EXISTS
-#undef VSS_E_UNEXPECTED_PROVIDER_ERROR
-#undef VSS_E_INVALID_XML_DOCUMENT
-#undef VSS_E_MAXIMUM_NUMBER_OF_VOLUMES_REACHED
-#undef VSS_E_MAXIMUM_NUMBER_OF_SNAPSHOTS_REACHED
-
 #include <vss.h>
 #include "vss-handles.h"
 
