@@ -3482,7 +3482,8 @@ run_config = configuration_data({'build_dir': meson.current_build_dir()})
 run = configure_file(input: 'run.in',
                      output: 'run',
                      configuration: run_config)
-run_command('chmod', 'a+x', run, check: true)
+# TODO: No chmod on Windows and make 0 sence in Cygwin/Msys2 env
+# run_command('chmod', 'a+x', meson.current_build_dir() / 'run', check: true)
 
 hxtool = find_program('scripts/hxtool')
 shaderinclude = find_program('scripts/shaderinclude.py')
