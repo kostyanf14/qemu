@@ -23,7 +23,7 @@
  */
 
 #include "qemu/osdep.h"
-#include <getopt.h>
+#include "qemu/getopt.h"
 
 #include "qemu/help-texts.h"
 #include "qemu/qemu-progress.h"

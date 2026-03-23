@@ -9,6 +9,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/getopt.h"
 #include "qapi/error.h"
 #include "qobject/qdict.h"
 #include "qemu-io.h"
