@@ -175,13 +175,13 @@ static void zynq_set_boot_mode(Object *obj, const char *str,
     ZynqMachineState *m = ZYNQ_MACHINE(obj);
     uint8_t mode = 0;
 
-    if (!g_ascii_strcasecmp(str, "qspi")) {
+    if (!g_ascii_strncasecmp(str, "qspi", 4)) {
         mode = 1;
-    } else if (!g_ascii_strcasecmp(str, "sd")) {
+    } else if (!g_ascii_strncasecmp(str, "sd", 2)) {
         mode = 5;
-    } else if (!g_ascii_strcasecmp(str, "nor")) {
+    } else if (!g_ascii_strncasecmp(str, "nor", 3)) {
         mode = 2;
-    } else if (!g_ascii_strcasecmp(str, "jtag")) {
+    } else if (!g_ascii_strncasecmp(str, "jtag", 4)) {
         mode = 0;
     } else {
         error_setg(errp, "%s boot mode not supported", str);
