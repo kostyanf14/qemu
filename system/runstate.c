@@ -61,6 +61,8 @@
 #include "system/confidential-guest-support.h"
 #include "system/system.h"
 #include "system/tpm.h"
+#include "ui/console.h"
+
 #include "trace.h"
 
 static NotifierList exit_notifiers =
@@ -349,6 +351,9 @@ VMChangeStateEntry *qemu_add_vm_change_state_handler(VMChangeStateHandler *cb,
 
 void qemu_del_vm_change_state_handler(VMChangeStateEntry *e)
 {
+    if (!e) {
+        return;
+    }
     QTAILQ_REMOVE(&vm_change_state_head, e, entries);
     g_free(e);
 }
@@ -1041,5 +1046,8 @@ void qemu_cleanup(int status)
     monitor_cleanup();
     qemu_chr_cleanup();
     user_creatable_cleanup();
+#ifdef CONFIG_VNC
+    vnc_cleanup();
+#endif
     /* TODO: unref root container, check all devices are ok */
 }

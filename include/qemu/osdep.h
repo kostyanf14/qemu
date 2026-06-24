@@ -114,19 +114,23 @@ QEMU_EXTERN_C int daemon(int, int);
 #include <stdio.h>
 
 #include <string.h>
-#include <strings.h>
 #include <inttypes.h>
 #include <limits.h>
 /* Put unistd.h before time.h as that triggers localtime_r/gmtime_r
  * function availability on recentish Mingw-w64 platforms. */
+#ifdef _MSC_VER
+#include "qemu/posix-compat-msvc.h"
+#else
 #include <unistd.h>
+#endif
 #include <time.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <sys/stat.h>
+#ifndef _MSC_VER
 #include <sys/time.h>
+#endif
 #include <assert.h>
 /* setjmp must be declared before system/os-win32.h
  * because it is redefined there. */
@@ -779,21 +783,6 @@ static inline uintptr_t qemu_real_host_page_size(void)
 static inline intptr_t qemu_real_host_page_mask(void)
 {
     return -(intptr_t)qemu_real_host_page_size();
-}
-
-/*
- * After using getopt or getopt_long, if you need to parse another set
- * of options, then you must reset optind.  Unfortunately the way to
- * do this varies between implementations of getopt.
- */
-static inline void qemu_reset_optind(void)
-{
-#ifdef HAVE_OPTRESET
-    optind = 1;
-    optreset = 1;
-#else
-    optind = 0;
-#endif
 }
 
 int qemu_fdatasync(int fd);

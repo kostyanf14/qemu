@@ -10,6 +10,7 @@ tests = {
   'check-qnull': [],
   'check-qobject': [],
   'check-qjson': [],
+  'check-json-parser': [],
   'check-qlit': [],
   'test-error-report': [],
   'test-qobject-output-visitor': [testqapi],
@@ -48,6 +49,7 @@ tests = {
   'test-qapi-util': [],
   'test-interval-tree': [],
   'test-fifo': [],
+  'test-envlist': [],
 }
 
 if have_system or have_tools
@@ -160,7 +162,7 @@ if have_system
 endif
 
 if have_ga and host_os == 'linux'
-  tests += {'test-qga': ['../qtest/libqmp.c']}
+  tests += {'test-qga': ['../qtest/libqmp.c', '../qtest/libqtest.c']}
   test_deps += {'test-qga': qga}
 endif
 

@@ -275,16 +275,30 @@ static int ioeventfd(int vm_fd, int event_fd, uint64_t addr, Datamatch dm,
         }
     }
 
-    return ioctl(vm_fd, MSHV_IOEVENTFD, &args);
+    int ret = ioctl(vm_fd, MSHV_IOEVENTFD, &args);
+    if (ret < 0) {
+        return -errno;
+    }
+
+    return ret;
 }
 
-static int unregister_ioevent(int vm_fd, int event_fd, uint64_t mmio_addr)
+static int unregister_ioevent(int vm_fd, int event_fd, uint64_t mmio_addr,
+                              uint64_t data, uint32_t len, bool data_match)
 {
     uint32_t flags = 0;
     Datamatch dm = {0};
 
     flags |= BIT(MSHV_IOEVENTFD_BIT_DEASSIGN);
-    dm.tag = DATAMATCH_NONE;
+    if (!data_match) {
+        dm.tag = DATAMATCH_NONE;
+    } else if (len == sizeof(uint64_t)) {
+        dm.tag = DATAMATCH_U64;
+        dm.value.u64 = data;
+    } else {
+        dm.tag = DATAMATCH_U32;
+        dm.value.u32 = data;
+    }
 
     return ioeventfd(vm_fd, event_fd, mmio_addr, dm, flags);
 }
@@ -337,11 +351,12 @@ static void mem_ioeventfd_del(MemoryListener *listener,
     int fd = event_notifier_get_fd(e);
     int ret;
     uint64_t addr = section->offset_within_address_space;
+    uint64_t len = int128_get64(section->size);
 
     trace_mshv_mem_ioeventfd_del(section->offset_within_address_space,
                                  int128_get64(section->size), data);
 
-    ret = unregister_ioevent(mshv_state->vm, fd, addr);
+    ret = unregister_ioevent(mshv_state->vm, fd, addr, data, len, match_data);
     if (ret < 0) {
         error_report("Failed to unregister ioeventfd: %s (%d)", strerror(-ret),
                      -ret);
@@ -699,11 +714,23 @@ static const TypeInfo mshv_accel_type = {
     .instance_size = sizeof(MshvState),
 };
 
+/*
+ * MSHV manages secondary processors in the hypervisor. SIPI for x86 and
+ * PSCI for Arm are handled internally. Halted vCPUs must still enter
+ * mshv_cpu_exec() so that MSHV_RUN_VP is called and the hypervisor will
+ * wake APs.
+ */
+static bool mshv_vcpu_thread_is_idle(CPUState *cpu)
+{
+    return false;
+}
+
 static void mshv_accel_ops_class_init(ObjectClass *oc, const void *data)
 {
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);
 
     ops->create_vcpu_thread = mshv_start_vcpu_thread;
+    ops->cpu_thread_is_idle = mshv_vcpu_thread_is_idle;
     ops->synchronize_post_init = mshv_cpu_synchronize_post_init;
     ops->synchronize_post_reset = mshv_cpu_synchronize_post_reset;
     ops->synchronize_state = mshv_cpu_synchronize;

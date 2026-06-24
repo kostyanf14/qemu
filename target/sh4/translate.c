@@ -1974,7 +1974,7 @@ static void decode_gusa(DisasContext *ctx, CPUSH4State *env)
         break;
 
     case 0x7000 ... 0x700f: /* add #imm,Rn */
-        if (op_dst != B11_8 || mv_src >= 0) {
+        if (op_dst != B11_8 || (mv_src >= 0 && mv_src != ld_dst)) {
             goto fail;
         }
         op_opc = INDEX_op_add;
@@ -2316,5 +2316,6 @@ void sh4_translate_code(CPUState *cs, TranslationBlock *tb,
 {
     DisasContext ctx;
 
-    translator_loop(cs, tb, max_insns, pc, host_pc, &sh4_tr_ops, &ctx.base);
+    translator_loop(cs, tb, max_insns, pc, host_pc, &sh4_tr_ops, &ctx.base,
+                    TCG_TYPE_VA);
 }

@@ -228,6 +228,7 @@ static void hpm_setup_timer(RISCVIOMMUState *s, uint64_t value)
     }
 
     overflow_at = (uint64_t)qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + overflow_ns;
+    s->irq_overflow_left = 0;
 
     if (overflow_at > INT64_MAX) {
         s->irq_overflow_left = overflow_at - INT64_MAX;
@@ -244,7 +245,8 @@ void riscv_iommu_process_iocntinh_cy(RISCVIOMMUState *s, bool prev_cy_inh)
         s, RISCV_IOMMU_REG_IOCOUNTINH);
 
     /* We only need to process CY bit toggle. */
-    if (!(inhibit ^ prev_cy_inh)) {
+    bool cy_inh = !!(inhibit & RISCV_IOMMU_IOCOUNTINH_CY);
+    if (cy_inh == prev_cy_inh) {
         return;
     }
 

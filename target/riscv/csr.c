@@ -398,6 +398,10 @@ static RISCVException scountinhibit_pred(CPURISCVState *env, int csrno)
         return RISCV_EXCP_ILLEGAL_INST;
     }
 
+    if (!get_field(env->menvcfg, MENVCFG_CDE)) {
+        return RISCV_EXCP_ILLEGAL_INST;
+    }
+
     if (env->virt_enabled) {
         return RISCV_EXCP_VIRT_INSTRUCTION_FAULT;
     }
@@ -502,6 +506,15 @@ static RISCVException mstateen(CPURISCVState *env, int csrno)
     return any(env, csrno);
 }
 
+static RISCVException mstateen_32(CPURISCVState *env, int csrno)
+{
+    if (riscv_cpu_mxl(env) != MXL_RV32) {
+        return RISCV_EXCP_ILLEGAL_INST;
+    }
+
+    return mstateen(env, csrno);
+}
+
 static RISCVException hstateen_pred(CPURISCVState *env, int csrno, int base)
 {
     if (!riscv_cpu_cfg(env)->ext_smstateen) {
@@ -533,6 +546,10 @@ static RISCVException hstateen(CPURISCVState *env, int csrno)
 
 static RISCVException hstateenh(CPURISCVState *env, int csrno)
 {
+    if (riscv_cpu_mxl(env) != MXL_RV32) {
+        return RISCV_EXCP_ILLEGAL_INST;
+    }
+
     return hstateen_pred(env, csrno, CSR_HSTATEEN0H);
 }
 
@@ -768,6 +785,9 @@ static RISCVException have_mseccfg(CPURISCVState *env, int csrno)
         return RISCV_EXCP_NONE;
     }
     if (riscv_cpu_cfg(env)->ext_smmpm) {
+        return RISCV_EXCP_NONE;
+    }
+    if (riscv_cpu_cfg(env)->ext_zicfilp) {
         return RISCV_EXCP_NONE;
     }
 
@@ -1389,8 +1409,9 @@ RISCVException riscv_pmu_read_ctr(CPURISCVState *env, target_ulong *val,
      */
     if (riscv_pmu_ctr_monitor_cycles(env, ctr_idx) ||
         riscv_pmu_ctr_monitor_instructions(env, ctr_idx)) {
-        *val = riscv_pmu_ctr_get_fixed_counters_val(env, ctr_idx) -
-                                                    ctr_prev + ctr_val;
+        uint64_t cntr = riscv_pmu_ctr_get_fixed_counters_val(env, ctr_idx) -
+                                                             ctr_prev + ctr_val;
+        *val = extract64(cntr, start, length);
     } else {
         *val = ctr_val;
     }
@@ -1761,13 +1782,13 @@ static RISCVException write_stimecmph(CPURISCVState *env, int csrno,
 #define VSTOPI_NUM_SRCS 5
 
 /*
- * All core local interrupts except the fixed ones 0:12. This macro is for
+ * All core local interrupts except the fixed ones 0:15. This macro is for
  * virtual interrupts logic so please don't change this to avoid messing up
  * the whole support, For reference see AIA spec: `5.3 Interrupt filtering and
  * virtual interrupts for supervisor level` and `6.3.2 Virtual interrupts for
  * VS level`.
  */
-#define LOCAL_INTERRUPTS   (~0x1FFFULL)
+#define LOCAL_INTERRUPTS   (~0xFFFFULL)
 
 static const uint64_t delegable_ints =
     S_MODE_INTERRUPTS | VS_MODE_INTERRUPTS | MIP_LCOFIP;
@@ -1786,7 +1807,6 @@ static const uint64_t all_ints = M_MODE_INTERRUPTS | S_MODE_INTERRUPTS |
                          (1ULL << (RISCV_EXCP_U_ECALL)) | \
                          (1ULL << (RISCV_EXCP_S_ECALL)) | \
                          (1ULL << (RISCV_EXCP_VS_ECALL)) | \
-                         (1ULL << (RISCV_EXCP_M_ECALL)) | \
                          (1ULL << (RISCV_EXCP_INST_PAGE_FAULT)) | \
                          (1ULL << (RISCV_EXCP_LOAD_PAGE_FAULT)) | \
                          (1ULL << (RISCV_EXCP_STORE_PAGE_FAULT)) | \
@@ -3162,7 +3182,7 @@ static RISCVException write_menvcfg(CPURISCVState *env, int csrno,
 {
     const RISCVCPUConfig *cfg = riscv_cpu_cfg(env);
     uint64_t mask = MENVCFG_FIOM | MENVCFG_CBIE | MENVCFG_CBCFE |
-                    MENVCFG_CBZE | MENVCFG_CDE;
+                    MENVCFG_CBZE;
     bool stce_changed = false;
 
     if (riscv_cpu_mxl(env) == MXL_RV64) {
@@ -3353,7 +3373,15 @@ static RISCVException write_henvcfg(CPURISCVState *env, int csrno,
         }
     }
 
-    env->henvcfg = val & mask;
+    if (riscv_cpu_mxl(env) == MXL_RV32) {
+        /*
+         * RV32 stores STCE/ADUE/PBMTE/DTE in henvcfgh, so a low-half henvcfg
+         * write must not clobber the upper 32 bits.
+         */
+        env->henvcfg = (env->henvcfg & ~0xFFFFFFFFULL) | (val & mask);
+    } else {
+        env->henvcfg = val & mask;
+    }
     if ((env->henvcfg & HENVCFG_DTE) == 0) {
         env->vsstatus &= ~MSTATUS_SDT;
     }
@@ -3439,25 +3467,29 @@ static RISCVException write_mstateen0(CPURISCVState *env, int csrno,
         wr_mask |= SMSTATEEN0_FCSR;
     }
 
-    if (env->priv_ver >= PRIV_VERSION_1_13_0) {
-        wr_mask |= SMSTATEEN0_P1P13;
-    }
+    if (riscv_cpu_mxl(env) == MXL_RV64) {
+        if (env->priv_ver >= PRIV_VERSION_1_13_0) {
+            wr_mask |= SMSTATEEN0_P1P13;
+        }
 
-    if (riscv_cpu_cfg(env)->ext_smaia || riscv_cpu_cfg(env)->ext_smcsrind) {
-        wr_mask |= SMSTATEEN0_SVSLCT;
-    }
+        if (riscv_cpu_cfg(env)->ext_smaia ||
+            riscv_cpu_cfg(env)->ext_smcsrind) {
+            wr_mask |= SMSTATEEN0_SVSLCT;
+        }
 
-    /*
-     * As per the AIA specification, SMSTATEEN0_IMSIC is valid only if IMSIC is
-     * implemented. However, that information is with MachineState and we can't
-     * figure that out in csr.c. Just enable if Smaia is available.
-     */
-    if (riscv_cpu_cfg(env)->ext_smaia) {
-        wr_mask |= (SMSTATEEN0_AIA | SMSTATEEN0_IMSIC);
-    }
+        /*
+         * As per the AIA specification, SMSTATEEN0_IMSIC is valid
+         * only if IMSIC is implemented. However, that information is
+         * with MachineState and we can't figure that out in csr.c.
+         * Just enable if Smaia is available.
+         */
+        if (riscv_cpu_cfg(env)->ext_smaia) {
+            wr_mask |= (SMSTATEEN0_AIA | SMSTATEEN0_IMSIC);
+        }
 
-    if (riscv_cpu_cfg(env)->ext_ssctr) {
-        wr_mask |= SMSTATEEN0_CTR;
+        if (riscv_cpu_cfg(env)->ext_ssctr) {
+            wr_mask |= SMSTATEEN0_CTR;
+        }
     }
 
     return write_mstateen(env, csrno, wr_mask, new_val);
@@ -3497,6 +3529,20 @@ static RISCVException write_mstateen0h(CPURISCVState *env, int csrno,
 
     if (env->priv_ver >= PRIV_VERSION_1_13_0) {
         wr_mask |= SMSTATEEN0_P1P13;
+    }
+
+    if (riscv_cpu_cfg(env)->ext_smaia || riscv_cpu_cfg(env)->ext_smcsrind) {
+        wr_mask |= SMSTATEEN0_SVSLCT;
+    }
+
+    /*
+     * As per the AIA specification, SMSTATEEN0_IMSIC is valid only if
+     * IMSIC is implemented. However, that information is with
+     * MachineState and we can't figure that out in csr.c. Just enable
+     * if Smaia is available.
+     */
+    if (riscv_cpu_cfg(env)->ext_smaia) {
+        wr_mask |= (SMSTATEEN0_AIA | SMSTATEEN0_IMSIC);
     }
 
     if (riscv_cpu_cfg(env)->ext_ssctr) {
@@ -3544,21 +3590,25 @@ static RISCVException write_hstateen0(CPURISCVState *env, int csrno,
         wr_mask |= SMSTATEEN0_FCSR;
     }
 
-    if (riscv_cpu_cfg(env)->ext_ssaia || riscv_cpu_cfg(env)->ext_sscsrind) {
-        wr_mask |= SMSTATEEN0_SVSLCT;
-    }
+    if (riscv_cpu_mxl(env) == MXL_RV64) {
+        if (riscv_cpu_cfg(env)->ext_ssaia ||
+            riscv_cpu_cfg(env)->ext_sscsrind) {
+            wr_mask |= SMSTATEEN0_SVSLCT;
+        }
 
-    /*
-     * As per the AIA specification, SMSTATEEN0_IMSIC is valid only if IMSIC is
-     * implemented. However, that information is with MachineState and we can't
-     * figure that out in csr.c. Just enable if Ssaia is available.
-     */
-    if (riscv_cpu_cfg(env)->ext_ssaia) {
-        wr_mask |= (SMSTATEEN0_AIA | SMSTATEEN0_IMSIC);
-    }
+        /*
+         * As per the AIA specification, SMSTATEEN0_IMSIC is valid
+         * only if IMSIC is implemented. However, that information is
+         * with MachineState and we can't figure that out in csr.c.
+         * Just enable if Ssaia is available.
+         */
+        if (riscv_cpu_cfg(env)->ext_ssaia) {
+            wr_mask |= (SMSTATEEN0_AIA | SMSTATEEN0_IMSIC);
+        }
 
-    if (riscv_cpu_cfg(env)->ext_ssctr) {
-        wr_mask |= SMSTATEEN0_CTR;
+        if (riscv_cpu_cfg(env)->ext_ssctr) {
+            wr_mask |= SMSTATEEN0_CTR;
+        }
     }
 
     return write_hstateen(env, csrno, wr_mask, new_val);
@@ -3599,6 +3649,20 @@ static RISCVException write_hstateen0h(CPURISCVState *env, int csrno,
                                        target_ulong new_val, uintptr_t ra)
 {
     uint64_t wr_mask = SMSTATEEN_STATEEN | SMSTATEEN0_HSENVCFG;
+
+    if (riscv_cpu_cfg(env)->ext_ssaia || riscv_cpu_cfg(env)->ext_sscsrind) {
+        wr_mask |= SMSTATEEN0_SVSLCT;
+    }
+
+    /*
+     * As per the AIA specification, SMSTATEEN0_IMSIC is valid only if
+     * IMSIC is implemented. However, that information is with
+     * MachineState and we can't figure that out in csr.c. Just enable
+     * if Ssaia is available.
+     */
+    if (riscv_cpu_cfg(env)->ext_ssaia) {
+        wr_mask |= (SMSTATEEN0_AIA | SMSTATEEN0_IMSIC);
+    }
 
     if (riscv_cpu_cfg(env)->ext_ssctr) {
         wr_mask |= SMSTATEEN0_CTR;
@@ -3649,7 +3713,7 @@ static RISCVException write_sstateen(CPURISCVState *env, int csrno,
 static RISCVException write_sstateen0(CPURISCVState *env, int csrno,
                                       target_ulong new_val, uintptr_t ra)
 {
-    uint64_t wr_mask = SMSTATEEN_STATEEN | SMSTATEEN0_HSENVCFG;
+    uint64_t wr_mask = 0;
 
     if (!riscv_has_ext(env, RVF)) {
         wr_mask |= SMSTATEEN0_FCSR;
@@ -3670,6 +3734,14 @@ static RISCVException rmw_mip64(CPURISCVState *env, int csrno,
 {
     uint64_t old_mip, mask = wr_mask & delegable_ints;
     uint32_t gin;
+
+    /*
+     * When mvien[9]=1, mip.SEIP is read-only and reflects only
+     * the external interrupt signal from the interrupt controller.
+     */
+    if (env->mvien & MIP_SEIP) {
+        mask &= ~MIP_SEIP;
+    }
 
     if (mask & MIP_SEIP) {
         env->software_seip = new_val & MIP_SEIP;
@@ -5294,6 +5366,23 @@ static RISCVException read_pmpaddr(CPURISCVState *env, int csrno,
                                    target_ulong *val)
 {
     *val = pmpaddr_csr_read(env, csrno - CSR_PMPADDR0);
+
+    /*
+     * For RV64, bits 54-63 of the address registers
+     * PMPAADDR(0-63) is a WARL zero field (priv spec,
+     * section "Physical Memory Protection CSRs").
+     *
+     * We'll have to add an annoying TARGET_RISCV64 gate
+     * here to avoid complaints about masking bits 0-53
+     * of a potential 32 bit target_ulong '*var'.
+     */
+#ifdef TARGET_RISCV64
+    if (env->misa_mxl == MXL_RV64
+        && csrno >= CSR_PMPADDR0 && csrno <= CSR_PMPADDR63) {
+        target_ulong read_mask = MAKE_64BIT_MASK(0, 54);
+        *val &= read_mask;
+    }
+#endif
     return RISCV_EXCP_NONE;
 }
 
@@ -5929,25 +6018,25 @@ riscv_csr_operations csr_ops[CSR_TABLE_SIZE] = {
     /* Smstateen extension CSRs */
     [CSR_MSTATEEN0] = { "mstateen0", mstateen, read_mstateen, write_mstateen0,
                         .min_priv_ver = PRIV_VERSION_1_12_0 },
-    [CSR_MSTATEEN0H] = { "mstateen0h", mstateen, read_mstateenh,
+    [CSR_MSTATEEN0H] = { "mstateen0h", mstateen_32, read_mstateenh,
                           write_mstateen0h,
                          .min_priv_ver = PRIV_VERSION_1_12_0 },
     [CSR_MSTATEEN1] = { "mstateen1", mstateen, read_mstateen,
                         write_mstateen_1_3,
                         .min_priv_ver = PRIV_VERSION_1_12_0 },
-    [CSR_MSTATEEN1H] = { "mstateen1h", mstateen, read_mstateenh,
+    [CSR_MSTATEEN1H] = { "mstateen1h", mstateen_32, read_mstateenh,
                          write_mstateenh_1_3,
                          .min_priv_ver = PRIV_VERSION_1_12_0 },
     [CSR_MSTATEEN2] = { "mstateen2", mstateen, read_mstateen,
                         write_mstateen_1_3,
                         .min_priv_ver = PRIV_VERSION_1_12_0 },
-    [CSR_MSTATEEN2H] = { "mstateen2h", mstateen, read_mstateenh,
+    [CSR_MSTATEEN2H] = { "mstateen2h", mstateen_32, read_mstateenh,
                          write_mstateenh_1_3,
                          .min_priv_ver = PRIV_VERSION_1_12_0 },
     [CSR_MSTATEEN3] = { "mstateen3", mstateen, read_mstateen,
                         write_mstateen_1_3,
                         .min_priv_ver = PRIV_VERSION_1_12_0 },
-    [CSR_MSTATEEN3H] = { "mstateen3h", mstateen, read_mstateenh,
+    [CSR_MSTATEEN3H] = { "mstateen3h", mstateen_32, read_mstateenh,
                          write_mstateenh_1_3,
                          .min_priv_ver = PRIV_VERSION_1_12_0 },
     [CSR_HSTATEEN0] = { "hstateen0", hstateen, read_hstateen, write_hstateen0,

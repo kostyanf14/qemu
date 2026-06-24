@@ -55,6 +55,7 @@
 #include <math.h>
 
 #include "trace.h"
+#include "standard-headers/linux/input-event-codes.h"
 #include "ui/input.h"
 #include "system/runstate.h"
 #include "system/system.h"
@@ -120,6 +121,7 @@
 
 static const guint16 *keycode_map;
 static size_t keycode_maplen;
+static bool keycode_xorgevdev;
 
 struct VCChardev {
     Chardev parent;
@@ -436,7 +438,7 @@ static void gd_update(DisplayChangeListener *dcl,
 
 static void gd_refresh(DisplayChangeListener *dcl)
 {
-    graphic_hw_update(dcl->con);
+    qemu_console_hw_update(dcl->con);
 }
 
 static GdkDevice *gd_get_pointer(GdkDisplay *dpy)
@@ -602,7 +604,7 @@ void gd_hw_gl_flushed(void *vcon)
         qemu_set_fd_handler(fence_fd, NULL, NULL, NULL);
         close(fence_fd);
         qemu_dmabuf_set_fence_fd(dmabuf, -1);
-        graphic_hw_gl_block(vc->gfx.dcl.con, false);
+        qemu_console_hw_gl_block(vc->gfx.dcl.con, false);
     }
 }
 
@@ -729,27 +731,27 @@ static void gd_set_ui_refresh_rate(VirtualConsole *vc, int refresh_rate)
 {
     QemuUIInfo info;
 
-    if (!dpy_ui_info_supported(vc->gfx.dcl.con)) {
+    if (!qemu_console_ui_info_supported(vc->gfx.dcl.con)) {
         return;
     }
 
-    info = *dpy_get_ui_info(vc->gfx.dcl.con);
+    info = *qemu_console_get_ui_info(vc->gfx.dcl.con);
     info.refresh_rate = refresh_rate;
-    dpy_set_ui_info(vc->gfx.dcl.con, &info, true);
+    qemu_console_set_ui_info(vc->gfx.dcl.con, &info, true);
 }
 
 static void gd_set_ui_size(VirtualConsole *vc, gint width, gint height)
 {
     QemuUIInfo info;
 
-    if (!dpy_ui_info_supported(vc->gfx.dcl.con)) {
+    if (!qemu_console_ui_info_supported(vc->gfx.dcl.con)) {
         return;
     }
 
-    info = *dpy_get_ui_info(vc->gfx.dcl.con);
+    info = *qemu_console_get_ui_info(vc->gfx.dcl.con);
     info.width = width;
     info.height = height;
-    dpy_set_ui_info(vc->gfx.dcl.con, &info, true);
+    qemu_console_set_ui_info(vc->gfx.dcl.con, &info, true);
 }
 
 #if defined(CONFIG_OPENGL)
@@ -1201,49 +1203,52 @@ static gboolean gd_touch_event(GtkWidget *widget, GdkEventTouch *touch,
         return FALSE;
     }
 
-    console_handle_touch_event(vc->gfx.dcl.con, touch_slots,
-                               num_slot, surface_width(vc->gfx.ds),
-                               surface_height(vc->gfx.ds), touch->x,
-                               touch->y, type, &err);
+    qemu_input_touch_event(vc->gfx.dcl.con, touch_slots,
+                           num_slot, surface_width(vc->gfx.ds),
+                           surface_height(vc->gfx.ds), touch->x,
+                           touch->y, type, &err);
     if (err) {
         warn_report_err(err);
     }
     return TRUE;
 }
 
-static const guint16 *gd_get_keymap(size_t *maplen)
+static const guint16 *gd_get_keymap(size_t *maplen, bool *xorgevdev)
 {
     GdkDisplay *dpy = gdk_display_get_default();
+
+    *maplen = 0;
+    *xorgevdev = false;
 
 #ifdef GDK_WINDOWING_X11
     if (GDK_IS_X11_DISPLAY(dpy)) {
         trace_gd_keymap_windowing("x11");
         return qemu_xkeymap_mapping_table(
-            gdk_x11_display_get_xdisplay(dpy), maplen);
+            gdk_x11_display_get_xdisplay(dpy), maplen, xorgevdev);
     }
 #endif
 
 #ifdef GDK_WINDOWING_WAYLAND
     if (GDK_IS_WAYLAND_DISPLAY(dpy)) {
         trace_gd_keymap_windowing("wayland");
-        *maplen = qemu_input_map_xorgevdev_to_qcode_len;
-        return qemu_input_map_xorgevdev_to_qcode;
+        *xorgevdev = true;
+        return NULL;
     }
 #endif
 
 #ifdef GDK_WINDOWING_WIN32
     if (GDK_IS_WIN32_DISPLAY(dpy)) {
         trace_gd_keymap_windowing("win32");
-        *maplen = qemu_input_map_atset1_to_qcode_len;
-        return qemu_input_map_atset1_to_qcode;
+        *maplen = qemu_input_map_atset1_to_linux_len;
+        return qemu_input_map_atset1_to_linux;
     }
 #endif
 
 #ifdef GDK_WINDOWING_QUARTZ
     if (GDK_IS_QUARTZ_DISPLAY(dpy)) {
         trace_gd_keymap_windowing("quartz");
-        *maplen = qemu_input_map_osx_to_qcode_len;
-        return qemu_input_map_osx_to_qcode;
+        *maplen = qemu_input_map_osx_to_linux_len;
+        return qemu_input_map_osx_to_linux;
     }
 #endif
 
@@ -1253,8 +1258,8 @@ static const guint16 *gd_get_keymap(size_t *maplen)
         g_warning("experimental: using broadway, x11 virtual keysym\n"
                   "mapping - with very limited support. See also\n"
                   "https://bugzilla.gnome.org/show_bug.cgi?id=700105");
-        *maplen = qemu_input_map_x11_to_qcode_len;
-        return qemu_input_map_x11_to_qcode;
+        *maplen = qemu_input_map_x11_to_linux_len;
+        return qemu_input_map_x11_to_linux;
     }
 #endif
 
@@ -1269,8 +1274,11 @@ static const guint16 *gd_get_keymap(size_t *maplen)
 }
 
 
-static int gd_map_keycode(int scancode)
+static unsigned int gd_map_keycode(int scancode)
 {
+    if (keycode_xorgevdev) {
+        return scancode < 8 ? KEY_RESERVED : scancode - 8;
+    }
     if (!keycode_map) {
         return 0;
     }
@@ -1307,12 +1315,12 @@ static gboolean gd_text_key_down(GtkWidget *widget,
     QemuTextConsole *con = QEMU_TEXT_CONSOLE(vc->gfx.dcl.con);
 
     if (key->keyval == GDK_KEY_Delete) {
-        qemu_text_console_put_qcode(con, Q_KEY_CODE_DELETE, false);
+        qemu_text_console_put_linux(con, KEY_DELETE, false);
     } else if (key->length) {
         qemu_text_console_put_string(con, key->string, key->length);
     } else {
-        int qcode = gd_map_keycode(gd_get_keycode(key));
-        qemu_text_console_put_qcode(con, qcode, false);
+        unsigned int lnx = gd_map_keycode(gd_get_keycode(key));
+        qemu_text_console_put_linux(con, lnx, false);
     }
     return TRUE;
 }
@@ -1320,7 +1328,8 @@ static gboolean gd_text_key_down(GtkWidget *widget,
 static gboolean gd_key_event(GtkWidget *widget, GdkEventKey *key, void *opaque)
 {
     VirtualConsole *vc = opaque;
-    int keycode, qcode;
+    int keycode;
+    unsigned int lnx;
 
 #ifdef G_OS_WIN32
     /* on windows, we ought to ignore the reserved key event? */
@@ -1343,19 +1352,18 @@ static gboolean gd_key_event(GtkWidget *widget, GdkEventKey *key, void *opaque)
         || key->hardware_keycode == VK_PAUSE
 #endif
         ) {
-        qkbd_state_key_event(vc->gfx.kbd, Q_KEY_CODE_PAUSE,
+        qkbd_state_key_event(vc->gfx.kbd, KEY_PAUSE,
                              key->type == GDK_KEY_PRESS);
         return TRUE;
     }
 
     keycode = gd_get_keycode(key);
-    qcode = gd_map_keycode(keycode);
+    lnx = gd_map_keycode(keycode);
 
-    trace_gd_key_event(vc->label, keycode, qcode,
+    trace_gd_key_event(vc->label, keycode, lnx,
                        (key->type == GDK_KEY_PRESS) ? "down" : "up");
 
-    qkbd_state_key_event(vc->gfx.kbd, qcode,
-                         key->type == GDK_KEY_PRESS);
+    qkbd_state_key_event(vc->gfx.kbd, lnx, key->type == GDK_KEY_PRESS);
 
     return TRUE;
 }
@@ -1475,6 +1483,11 @@ static gboolean gd_tab_window_close(GtkWidget *widget, GdkEvent *event,
         vc->gfx.ectx = NULL;
     }
 #endif
+
+    if (vc == gd_vc_find_by_menu(s)) {
+        gtk_widget_grab_focus(vc->focus);
+    }
+
     return TRUE;
 }
 
@@ -2251,6 +2264,7 @@ static GSList *gd_vc_gfx_init(GtkDisplayState *s, VirtualConsole *vc,
                               QemuConsole *con, int idx,
                               GSList *group, GtkWidget *view_menu)
 {
+    const DisplayChangeListenerOps *ops = &dcl_ops;
     bool zoom_to_fit = false;
     int i;
 
@@ -2275,7 +2289,7 @@ static GSList *gd_vc_gfx_init(GtkDisplayState *s, VirtualConsole *vc,
             vc->gfx.drawing_area = gtk_gl_area_new();
             g_signal_connect(vc->gfx.drawing_area, "realize",
                              G_CALLBACK(gl_area_realize), vc);
-            vc->gfx.dcl.ops = &dcl_gl_area_ops;
+            ops = &dcl_gl_area_ops;
             vc->gfx.dgc.ops = &gl_area_ctx_ops;
         } else {
 #ifdef CONFIG_X11
@@ -2290,7 +2304,7 @@ static GSList *gd_vc_gfx_init(GtkDisplayState *s, VirtualConsole *vc,
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
             gtk_widget_set_double_buffered(vc->gfx.drawing_area, FALSE);
 #pragma GCC diagnostic pop
-            vc->gfx.dcl.ops = &dcl_egl_ops;
+            ops = &dcl_egl_ops;
             vc->gfx.dgc.ops = &egl_ctx_ops;
             vc->gfx.has_dmabuf = qemu_egl_has_dmabuf();
 #else
@@ -2301,7 +2315,6 @@ static GSList *gd_vc_gfx_init(GtkDisplayState *s, VirtualConsole *vc,
 #endif
     {
         vc->gfx.drawing_area = gtk_drawing_area_new();
-        vc->gfx.dcl.ops = &dcl_ops;
     }
 
 
@@ -2325,17 +2338,15 @@ static GSList *gd_vc_gfx_init(GtkDisplayState *s, VirtualConsole *vc,
                              vc->tab_item, gtk_label_new(vc->label));
 
     vc->gfx.kbd = qkbd_state_init(con);
-    vc->gfx.dcl.con = con;
-
     if (display_opengl) {
         qemu_console_set_display_gl_ctx(con, &vc->gfx.dgc);
     }
-    register_displaychangelistener(&vc->gfx.dcl);
+    qemu_console_register_listener(con, &vc->gfx.dcl, ops);
 
     gd_connect_vc_gfx_signals(vc);
     group = gd_vc_menu_init(s, vc, idx, group, view_menu);
 
-    if (dpy_ui_info_supported(vc->gfx.dcl.con)) {
+    if (qemu_console_ui_info_supported(vc->gfx.dcl.con)) {
         zoom_to_fit = true;
     }
     if (s->opts->u.gtk.has_zoom_to_fit) {
@@ -2601,9 +2612,11 @@ static void gtk_display_init(DisplayState *ds, DisplayOptions *opts)
         opts->u.gtk.show_tabs) {
         gtk_menu_item_activate(GTK_MENU_ITEM(s->show_tabs_item));
     }
-#ifdef CONFIG_GTK_CLIPBOARD
-    gd_clipboard_init(s);
-#endif /* CONFIG_GTK_CLIPBOARD */
+
+    if (opts->u.gtk.has_clipboard &&
+        opts->u.gtk.clipboard) {
+        gd_clipboard_init(s);
+    }
 
     /* GTK's event polling must happen on the main thread. */
     qemu_main = NULL;
@@ -2659,7 +2672,7 @@ static void early_gtk_display_init(DisplayOptions *opts)
 #endif
     }
 
-    keycode_map = gd_get_keymap(&keycode_maplen);
+    keycode_map = gd_get_keymap(&keycode_maplen, &keycode_xorgevdev);
 
 #if defined(CONFIG_VTE)
     type_register_static(&char_gd_vc_type_info);

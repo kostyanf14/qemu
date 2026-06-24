@@ -3517,6 +3517,8 @@ static void spapr_machine_finalizefn(Object *obj)
     SpaprMachineState *spapr = SPAPR_MACHINE(obj);
 
     g_free(spapr->kvm_type);
+    g_free(spapr->host_model);
+    g_free(spapr->host_serial);
 }
 
 void spapr_do_system_reset_on_cpu(CPUState *cs, run_on_cpu_data arg)
@@ -3685,7 +3687,7 @@ struct SpaprDimmState {
 static SpaprDimmState *spapr_pending_dimm_unplugs_find(SpaprMachineState *s,
                                                        PCDIMMDevice *dimm)
 {
-    SpaprDimmState *dimm_state = NULL;
+    SpaprDimmState *dimm_state;
 
     QTAILQ_FOREACH(dimm_state, &s->pending_dimm_unplugs, next) {
         if (dimm_state->dimm == dimm) {
@@ -4644,7 +4646,7 @@ static void spapr_machine_class_init(ObjectClass *oc, const void *data)
     hc->unplug_request = spapr_machine_device_unplug_request;
     hc->unplug = spapr_machine_device_unplug;
 
-    mc->default_cpu_type = POWERPC_CPU_TYPE_NAME("power10_v2.0");
+    mc->default_cpu_type = POWERPC_CPU_TYPE_NAME("power11_v2.0");
     mc->has_hotpluggable_cpus = true;
     mc->nvdimm_supported = true;
     smc->resize_hpt_default = SPAPR_RESIZE_HPT_ENABLED;
@@ -4761,14 +4763,26 @@ static void spapr_machine_latest_class_options(MachineClass *mc)
     DEFINE_SPAPR_MACHINE_IMPL(false, major, minor)
 
 /*
- * pseries-11.0
+ * pseries-11.1
  */
-static void spapr_machine_11_0_class_options(MachineClass *mc)
+static void spapr_machine_11_1_class_options(MachineClass *mc)
 {
     /* Defaults for the latest behaviour inherited from the base class */
 }
 
-DEFINE_SPAPR_MACHINE_AS_LATEST(11, 0);
+DEFINE_SPAPR_MACHINE_AS_LATEST(11, 1);
+
+/*
+ * pseries-11.0
+ */
+static void spapr_machine_11_0_class_options(MachineClass *mc)
+{
+    spapr_machine_11_1_class_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_11_0, hw_compat_11_0_len);
+    mc->default_cpu_type = POWERPC_CPU_TYPE_NAME("power10_v2.0");
+}
+
+DEFINE_SPAPR_MACHINE(11, 0);
 
 /*
  * pseries-10.2

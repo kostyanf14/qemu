@@ -12,7 +12,6 @@
  */
 
 #include "qemu/osdep.h"
-#include <getopt.h>
 #include <glib/gstdio.h>
 #ifndef _WIN32
 #include <syslog.h>
@@ -1236,154 +1235,331 @@ static void config_dump(GAConfig *config)
     g_key_file_free(keyfile);
 }
 
-static void config_parse(GAConfig *config, int argc, char **argv)
+/* Pre-scan argv for --config/-c so we can load config before overlaying CLI */
+static void get_config_path(int argc, char **argv, char **out_path, bool *out_required)
 {
-    const char *sopt = "hVvdc:m:p:l:f:F::b:a:s:t:Dr";
-    int opt_ind = 0, ch;
-    const struct option lopt[] = {
-        { "help", 0, NULL, 'h' },
-        { "version", 0, NULL, 'V' },
-        { "config", 1, NULL, 'c' },
-        { "dump-conf", 0, NULL, 'D' },
-        { "logfile", 1, NULL, 'l' },
-        { "pidfile", 1, NULL, 'f' },
-#ifdef CONFIG_FSFREEZE
-        { "fsfreeze-hook", 2, NULL, 'F' },
-#endif
-        { "verbose", 0, NULL, 'v' },
-        { "method", 1, NULL, 'm' },
-        { "path", 1, NULL, 'p' },
-        { "daemonize", 0, NULL, 'd' },
-        { "block-rpcs", 1, NULL, 'b' },
-        { "allow-rpcs", 1, NULL, 'a' },
-#ifdef _WIN32
-        { "service", 1, NULL, 's' },
-#endif
-        { "statedir", 1, NULL, 't' },
-        { "retry-path", 0, NULL, 'r' },
-        { NULL, 0, NULL, 0 }
-    };
     g_autofree char *confpath = g_strdup(g_getenv("QGA_CONF")) ?:
         get_relocated_path(QGA_CONF_DEFAULT);
-    bool confrequired = false;
+    bool required = false;
+    int i;
 
-    while ((ch = getopt_long(argc, argv, sopt, lopt, NULL)) != -1) {
-        switch (ch) {
-        case 'c':
+    for (i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+        if (strcmp(arg, "-c") == 0) {
+            if (i + 1 < argc) {
+                g_free(confpath);
+                confpath = g_strdup(argv[i + 1]);
+                required = true;
+                i++;
+            }
+            break;
+        }
+        if (g_str_has_prefix(arg, "--config=")) {
             g_free(confpath);
-            confpath = g_strdup(optarg);
-            confrequired = true;
-            break;
-        default:
+            confpath = g_strdup(arg + strlen("--config="));
+            required = true;
             break;
         }
+        if (strcmp(arg, "--config") == 0) {
+            if (i + 1 < argc) {
+                g_free(confpath);
+                confpath = g_strdup(argv[i + 1]);
+                required = true;
+                i++;
+            }
+            break;
+        }
+        if (arg[0] != '-' || (arg[1] != 'c' && strcmp(arg, "-c") != 0)) {
+            continue;
+        }
+        /* -c or -cPATH */
+        if (arg[2] != '\0') {
+            g_free(confpath);
+            confpath = g_strdup(arg + 2);
+        } else if (i + 1 < argc) {
+            g_free(confpath);
+            confpath = g_strdup(argv[i + 1]);
+            i++;
+        }
+        required = true;
+        break;
     }
+    *out_path = g_steal_pointer(&confpath);
+    *out_required = required;
+}
 
-    config_load(config, confpath, confrequired);
+typedef struct {
+    GAConfig *config;
+    const char *argv0;
+} ConfigParseData;
 
-    /* Reset for second pass */
-    optind = 1;
+static gboolean opt_method(const gchar *option_name, const gchar *value,
+                           gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    g_free(config->method);
+    config->method = g_strdup(value);
+    return TRUE;
+}
 
-    while ((ch = getopt_long(argc, argv, sopt, lopt, &opt_ind)) != -1) {
-        switch (ch) {
-        case 'm':
-            g_free(config->method);
-            config->method = g_strdup(optarg);
-            break;
-        case 'p':
-            g_free(config->channel_path);
-            config->channel_path = g_strdup(optarg);
-            break;
-        case 'l':
-            g_free(config->log_filepath);
-            config->log_filepath = g_strdup(optarg);
-            break;
-        case 'f':
-            g_free(config->pid_filepath);
-            config->pid_filepath = g_strdup(optarg);
-            break;
+static gboolean opt_path(const gchar *option_name, const gchar *value,
+                         gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    g_free(config->channel_path);
+    config->channel_path = g_strdup(value);
+    return TRUE;
+}
+
+static gboolean opt_logfile(const gchar *option_name, const gchar *value,
+                            gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    g_free(config->log_filepath);
+    config->log_filepath = g_strdup(value);
+    return TRUE;
+}
+
+static gboolean opt_pidfile(const gchar *option_name, const gchar *value,
+                            gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    g_free(config->pid_filepath);
+    config->pid_filepath = g_strdup(value);
+    return TRUE;
+}
+
 #ifdef CONFIG_FSFREEZE
-        case 'F':
-            g_free(config->fsfreeze_hook);
-            config->fsfreeze_hook = optarg ? g_strdup(optarg) : get_relocated_path(QGA_FSFREEZE_HOOK_DEFAULT);
-            break;
+static gboolean opt_fsfreeze_hook(const gchar *option_name, const gchar *value,
+                                  gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    g_free(config->fsfreeze_hook);
+    config->fsfreeze_hook = value ? g_strdup(value) :
+        get_relocated_path(QGA_FSFREEZE_HOOK_DEFAULT);
+    return TRUE;
+}
 #endif
-        case 't':
-            g_free(config->state_dir);
-            config->state_dir = g_strdup(optarg);
-            break;
-        case 'v':
-            /* enable all log levels */
-            config->log_level = G_LOG_LEVEL_MASK;
-            break;
-        case 'V':
-            printf("QEMU Guest Agent %s\n", QEMU_VERSION);
-            exit(EXIT_SUCCESS);
-        case 'd':
-            config->daemonize = 1;
-            break;
-        case 'D':
-            config->dumpconf = 1;
-            break;
-        case 'r':
-            config->retry_path = true;
-            break;
-        case 'b': {
-            if (is_help_option(optarg)) {
-                qmp_for_each_command(&ga_commands, ga_print_cmd, NULL);
-                exit(EXIT_SUCCESS);
-            }
-            config->blockedrpcs = g_list_concat(config->blockedrpcs,
-                                                split_list(optarg, ","));
-            break;
-        }
-        case 'a': {
-            if (is_help_option(optarg)) {
-                qmp_for_each_command(&ga_commands, ga_print_cmd, NULL);
-                exit(EXIT_SUCCESS);
-            }
-            config->allowedrpcs = g_list_concat(config->allowedrpcs,
-                                                split_list(optarg, ","));
-            break;
-        }
+
+static gboolean opt_statedir(const gchar *option_name, const gchar *value,
+                             gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    g_free(config->state_dir);
+    config->state_dir = g_strdup(value);
+    return TRUE;
+}
+
+static gboolean opt_verbose(const gchar *option_name, const gchar *value,
+                            gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    (void)value;
+    config->log_level = G_LOG_LEVEL_MASK;
+    return TRUE;
+}
+
+static gboolean opt_version(const gchar *option_name, const gchar *value,
+                            gpointer data, GError **errp)
+{
+    (void)option_name;
+    (void)value;
+    (void)data;
+    (void)errp;
+    printf("QEMU Guest Agent %s\n", QEMU_VERSION);
+    exit(EXIT_SUCCESS);
+}
+
+static gboolean opt_daemonize(const gchar *option_name, const gchar *value,
+                              gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    (void)value;
+    config->daemonize = 1;
+    return TRUE;
+}
+
+static gboolean opt_dumpconf(const gchar *option_name, const gchar *value,
+                             gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    (void)value;
+    config->dumpconf = 1;
+    return TRUE;
+}
+
+static gboolean opt_retry_path(const gchar *option_name, const gchar *value,
+                               gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    (void)value;
+    config->retry_path = true;
+    return TRUE;
+}
+
+static gboolean opt_block_rpcs(const gchar *option_name, const gchar *value,
+                               gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    if (is_help_option(value)) {
+        qmp_for_each_command(&ga_commands, ga_print_cmd, NULL);
+        exit(EXIT_SUCCESS);
+    }
+    config->blockedrpcs = g_list_concat(config->blockedrpcs,
+                                        split_list(value, ","));
+    return TRUE;
+}
+
+static gboolean opt_allow_rpcs(const gchar *option_name, const gchar *value,
+                                gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    if (is_help_option(value)) {
+        qmp_for_each_command(&ga_commands, ga_print_cmd, NULL);
+        exit(EXIT_SUCCESS);
+    }
+    config->allowedrpcs = g_list_concat(config->allowedrpcs,
+                                        split_list(value, ","));
+    return TRUE;
+}
+
+static gboolean opt_help(const gchar *option_name, const gchar *value,
+                         gpointer data, GError **errp)
+{
+    const char *argv0 = ((ConfigParseData *)data)->argv0;
+    (void)option_name;
+    (void)value;
+    (void)errp;
+    usage(argv0);
+    exit(EXIT_SUCCESS);
+}
+
 #ifdef _WIN32
-        case 's':
-            config->service = optarg;
-            if (strcmp(config->service, "install") == 0) {
-                if (ga_install_vss_provider()) {
-                    exit(EXIT_FAILURE);
-                }
-                if (ga_install_service(config->channel_path,
-                                       config->log_filepath, config->state_dir)) {
-                    exit(EXIT_FAILURE);
-                }
-                exit(EXIT_SUCCESS);
-            } else if (strcmp(config->service, "uninstall") == 0) {
-                ga_uninstall_vss_provider();
-                exit(ga_uninstall_service());
-            } else if (strcmp(config->service, "vss-install") == 0) {
-                if (ga_install_vss_provider()) {
-                    exit(EXIT_FAILURE);
-                }
-                exit(EXIT_SUCCESS);
-            } else if (strcmp(config->service, "vss-uninstall") == 0) {
-                ga_uninstall_vss_provider();
-                exit(EXIT_SUCCESS);
-            } else {
-                printf("Unknown service command.\n");
-                exit(EXIT_FAILURE);
-            }
-            break;
-#endif
-        case 'h':
-            usage(argv[0]);
-            exit(EXIT_SUCCESS);
-        case '?':
-            g_print("Unknown option, try '%s --help' for more information.\n",
-                    argv[0]);
+static gboolean opt_service(const gchar *option_name, const gchar *value,
+                            gpointer data, GError **errp)
+{
+    GAConfig *config = ((ConfigParseData *)data)->config;
+    (void)option_name;
+    config->service = value;
+    if (strcmp(config->service, "install") == 0) {
+        if (ga_install_vss_provider()) {
             exit(EXIT_FAILURE);
         }
+        if (ga_install_service(config->channel_path,
+                               config->log_filepath, config->state_dir)) {
+            exit(EXIT_FAILURE);
+        }
+        exit(EXIT_SUCCESS);
     }
+    if (strcmp(config->service, "uninstall") == 0) {
+        ga_uninstall_vss_provider();
+        exit(ga_uninstall_service());
+    }
+    if (strcmp(config->service, "vss-install") == 0) {
+        if (ga_install_vss_provider()) {
+            exit(EXIT_FAILURE);
+        }
+        exit(EXIT_SUCCESS);
+    }
+    if (strcmp(config->service, "vss-uninstall") == 0) {
+        ga_uninstall_vss_provider();
+        exit(EXIT_SUCCESS);
+    }
+    printf("Unknown service command.\n");
+    exit(EXIT_FAILURE);
+}
+#endif
+
+/* Dummy callback so --config is consumed by the parser (path already used in pre-scan) */
+static gboolean opt_config(const gchar *option_name, const gchar *value,
+                           gpointer data, GError **errp)
+{
+    (void)option_name;
+    (void)value;
+    (void)data;
+    (void)errp;
+    return TRUE;
+}
+
+static void config_parse(GAConfig *config, int argc, char **argv)
+{
+    g_autofree char *confpath = NULL;
+    bool confrequired = false;
+    GError *error = NULL;
+    GOptionContext *ctx;
+    ConfigParseData parse_data = { .config = config, .argv0 = argv[0] };
+    GOptionEntry entries[] = {
+        { "config", 'c', 0, G_OPTION_ARG_CALLBACK, opt_config,
+          "Configuration file path", "PATH" },
+        { "method", 'm', 0, G_OPTION_ARG_CALLBACK, opt_method,
+          "Transport method: unix-listen, virtio-serial, isa-serial, vsock-listen", "METHOD" },
+        { "path", 'p', 0, G_OPTION_ARG_CALLBACK, opt_path,
+          "Device/socket path", "PATH" },
+        { "logfile", 'l', 0, G_OPTION_ARG_CALLBACK, opt_logfile,
+          "Log file path", "PATH" },
+        { "pidfile", 'f', 0, G_OPTION_ARG_CALLBACK, opt_pidfile,
+          "Pid file path", "PATH" },
+#ifdef CONFIG_FSFREEZE
+        { "fsfreeze-hook", 'F', G_OPTION_FLAG_OPTIONAL_ARG, G_OPTION_ARG_CALLBACK, opt_fsfreeze_hook,
+          "Enable fsfreeze hook (optional script path)", "SCRIPT" },
+#endif
+        { "statedir", 't', 0, G_OPTION_ARG_CALLBACK, opt_statedir,
+          "State directory", "DIR" },
+        { "verbose", 'v', G_OPTION_FLAG_NO_ARG, G_OPTION_ARG_CALLBACK, opt_verbose,
+          "Log extra debugging information", NULL },
+        { "version", 'V', G_OPTION_FLAG_NO_ARG, G_OPTION_ARG_CALLBACK, opt_version,
+          "Print version and exit", NULL },
+        { "daemonize", 'd', G_OPTION_FLAG_NO_ARG, G_OPTION_ARG_CALLBACK, opt_daemonize,
+          "Become a daemon", NULL },
+        { "dump-conf", 'D', G_OPTION_FLAG_NO_ARG, G_OPTION_ARG_CALLBACK, opt_dumpconf,
+          "Dump configuration to stdout", NULL },
+        { "retry-path", 'r', G_OPTION_FLAG_NO_ARG, G_OPTION_ARG_CALLBACK, opt_retry_path,
+          "Retry opening path if unavailable", NULL },
+        { "block-rpcs", 'b', 0, G_OPTION_ARG_CALLBACK, opt_block_rpcs,
+          "Comma-separated list of RPCs to disable (use help to list)", "LIST" },
+        { "allow-rpcs", 'a', 0, G_OPTION_ARG_CALLBACK, opt_allow_rpcs,
+          "Comma-separated list of RPCs to enable (use help to list)", "LIST" },
+#ifdef _WIN32
+        { "service", 's', 0, G_OPTION_ARG_CALLBACK, opt_service,
+          "Service commands: install, uninstall, vss-install, vss-uninstall", "CMD" },
+#endif
+        { "help", 'h', G_OPTION_FLAG_NO_ARG, G_OPTION_ARG_CALLBACK, opt_help,
+          "Display help and exit", NULL },
+        { NULL }
+    };
+
+    get_config_path(argc, argv, &confpath, &confrequired);
+    config_load(config, confpath, confrequired);
+
+    ctx = g_option_context_new(NULL);
+    g_option_context_set_ignore_unknown_options(ctx, FALSE);
+    {
+        GOptionGroup *group = g_option_group_new(
+            NULL, NULL, NULL, &parse_data, NULL);
+        g_option_group_add_entries(group, entries);
+        g_option_context_set_main_group(ctx, group);
+    }
+
+    if (!g_option_context_parse(ctx, &argc, &argv, &error)) {
+        g_print("%s\n", error->message);
+        g_error_free(error);
+        g_option_context_free(ctx);
+        g_print("Try '%s --help' for more information.\n", parse_data.argv0);
+        exit(EXIT_FAILURE);
+    }
+    g_option_context_free(ctx);
 }
 
 static void config_free(GAConfig *config)

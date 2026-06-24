@@ -120,14 +120,14 @@ void sdl2_window_create(struct sdl2_console *scon)
 
         scon->winctx = SDL_GL_CreateContext(scon->real_window);
         SDL_GL_SetSwapInterval(0);
+
+#ifdef CONFIG_OPENGL
+        qemu_egl_display = eglGetCurrentDisplay();
+#endif
     } else {
         /* The SDL renderer is only used by sdl2-2D, when OpenGL is disabled */
         scon->real_renderer = SDL_CreateRenderer(scon->real_window, -1, 0);
     }
-
-#ifdef CONFIG_OPENGL
-    qemu_egl_display = eglGetCurrentDisplay();
-#endif
 
     sdl_update_caption(scon);
 }
@@ -600,11 +600,11 @@ static void handle_windowevent(SDL_Event *ev)
     switch (ev->window.event) {
     case SDL_WINDOWEVENT_RESIZED:
         {
-            QemuUIInfo info;
-            memset(&info, 0, sizeof(info));
-            info.width = ev->window.data1;
-            info.height = ev->window.data2;
-            dpy_set_ui_info(scon->dcl.con, &info, true);
+            QemuUIInfo info = {
+                .width = ev->window.data1,
+                .height = ev->window.data2,
+            };
+            qemu_console_set_ui_info(scon->dcl.con, &info, true);
         }
         sdl2_redraw(scon);
         break;
@@ -632,10 +632,10 @@ static void handle_windowevent(SDL_Event *ev)
         }
         break;
     case SDL_WINDOWEVENT_RESTORED:
-        update_displaychangelistener(&scon->dcl, GUI_REFRESH_INTERVAL_DEFAULT);
+        qemu_console_listener_set_refresh(&scon->dcl, GUI_REFRESH_INTERVAL_DEFAULT);
         break;
     case SDL_WINDOWEVENT_MINIMIZED:
-        update_displaychangelistener(&scon->dcl, 500);
+        qemu_console_listener_set_refresh(&scon->dcl, 500);
         break;
     case SDL_WINDOWEVENT_CLOSE:
         if (qemu_console_is_graphic(scon->dcl.con)) {
@@ -934,6 +934,7 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
     sdl2_console = g_new0(struct sdl2_console, sdl2_num_outputs);
     for (i = 0; i < sdl2_num_outputs; i++) {
         QemuConsole *con = qemu_console_lookup_by_index(i);
+        const DisplayChangeListenerOps *ops = &dcl_2d_ops;
         assert(con != NULL);
         if (!qemu_console_is_graphic(con) &&
             qemu_console_get_index(con) != 0) {
@@ -943,13 +944,11 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
         sdl2_console[i].opts = o;
 #ifdef CONFIG_OPENGL
         sdl2_console[i].opengl = display_opengl;
-        sdl2_console[i].dcl.ops = display_opengl ? &dcl_gl_ops : &dcl_2d_ops;
         sdl2_console[i].dgc.ops = display_opengl ? &gl_ctx_ops : NULL;
+        ops = display_opengl ? &dcl_gl_ops : &dcl_2d_ops;
 #else
         sdl2_console[i].opengl = 0;
-        sdl2_console[i].dcl.ops = &dcl_2d_ops;
 #endif
-        sdl2_console[i].dcl.con = con;
         sdl2_console[i].kbd = qkbd_state_init(con);
 #ifdef CONFIG_OPENGL
         if (display_opengl) {
@@ -957,8 +956,7 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
             sdl2_gl_console_init(&sdl2_console[i]);
         }
 #endif
-        register_displaychangelistener(&sdl2_console[i].dcl);
-
+        qemu_console_register_listener(con, &sdl2_console[i].dcl, ops);
 #if defined(SDL_VIDEO_DRIVER_WINDOWS) || defined(SDL_VIDEO_DRIVER_X11)
         if (SDL_GetWindowWMInfo(sdl2_console[i].real_window, &info)) {
 #if defined(SDL_VIDEO_DRIVER_WINDOWS)

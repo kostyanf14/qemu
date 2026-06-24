@@ -469,7 +469,7 @@ for a time/space trade-off like ``tlb_mmu_resize_locked`` in the
 SoftMMU TLB code.
 
 If the lifetime of the allocation is within the function and there are
-multiple exist paths you can also improve the readability of the code
+multiple exit paths you can also improve the readability of the code
 by using ``g_autofree`` and related annotations. See :ref:`autofree-ref`
 for more details.
 
@@ -784,10 +784,10 @@ error, non-negative / -errno, non-null / null, or Error objects.
 Example: when a function returns a non-null pointer on success, and it
 can fail only in one way (as far as the caller is concerned), returning
 null on failure is just fine, and certainly simpler and a lot easier on
-the eyes than propagating an Error object through an Error ``*````*`` parameter.
+the eyes than propagating an Error object through an ``Error **`` parameter.
 
 Example: when a function's callers need to report details on failure
-only the function really knows, use Error ``*````*``, and set suitable errors.
+only the function really knows, use ``Error **``, and set suitable errors.
 
 Do not report an error to the user when you're also returning an error
 for somebody else to handle.  Leave the reporting to the place that

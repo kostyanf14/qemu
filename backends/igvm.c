@@ -187,7 +187,7 @@ static void *qigvm_prepare_memory(QIgvm *ctx, uint64_t addr, uint64_t size,
             error_setg(
                 errp,
                 "Processing of IGVM file failed: Could not prepare memory "
-                "at address 0x%lX due to existing non-RAM region",
+                "at address 0x%" PRIx64 " due to existing non-RAM region",
                 addr);
             return NULL;
         }
@@ -198,8 +198,8 @@ static void *qigvm_prepare_memory(QIgvm *ctx, uint64_t addr, uint64_t size,
             error_setg(
                 errp,
                 "Processing of IGVM file failed: Could not prepare memory "
-                "at address 0x%lX: region size exceeded",
-                addr);
+                "at address 0x%" PRIx64 ": region size 0x%" PRIx64 " exceeded",
+                addr, size);
             return NULL;
         }
         return qemu_map_ram_ptr(mrs.mr->ram_block, mrs.offset_within_region);
@@ -216,11 +216,13 @@ static void *qigvm_prepare_memory(QIgvm *ctx, uint64_t addr, uint64_t size,
             ctx->machine_state->cgs->require_guest_memfd) {
             if (!memory_region_init_ram_guest_memfd(igvm_pages, NULL,
                                                     region_name, size, errp)) {
+                g_free(igvm_pages);
                 return NULL;
             }
         } else {
             if (!memory_region_init_ram(igvm_pages, NULL, region_name, size,
                                         errp)) {
+                g_free(igvm_pages);
                 return NULL;
             }
         }
